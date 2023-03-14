@@ -1,0 +1,25 @@
+{
+  "name": "@bosque/typespec-to-bosque",
+  "version": "0.1.0",
+  "description": "Compiler from TypeSpec into Bosque",
+  "scripts": {
+    "build": "tsc -p .",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/BosqueLanguage/TypeSpecToBosque.git"
+  },
+  "author": "Mark Marron",
+  "license": "MIT",
+  "dependencies": {
+    "@typespec/compiler": "^0.41.0"
+  },
+  "devDependencies": {
+    "typescript": "^4.9.5",
+    "@types/node": "18.15.2"
+  },
+  "type": "module",
+  "main": "dist/index.js",
+  "tspMain": "lib/main.tsp"
+}

@@ -1,0 +1,11 @@
+/node_modules
+/dist
+/.vscode
+/build/test/**
+*.xml
+*.dgml
+
+**/.DS_Store
+**/output/*
+
+testout.bsq
