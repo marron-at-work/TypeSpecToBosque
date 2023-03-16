@@ -14,3 +14,10 @@ model Post {
     uid: UID;
     pid: int64;
 }
+
+alias Both = User | Post;
+
+model Thing {
+    that: Both;
+    tup: [User, float64];
+}

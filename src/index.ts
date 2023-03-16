@@ -1,5 +1,5 @@
 
-import { EmitContext, Model, CodeTypeEmitter, Program, ModelProperty, code, BooleanLiteral, NumericLiteral, StringLiteral, Scalar, IntrinsicType, Type, getPattern } from "@typespec/compiler";
+import { EmitContext, Model, CodeTypeEmitter, Program, ModelProperty, code, BooleanLiteral, NumericLiteral, StringLiteral, Scalar, IntrinsicType, Type, getPattern, StringBuilder, getKnownValues, getMinLength, getMaxLength, getMinItems, getMaxItems, getMinValue, getMaxValue, Enum, EnumMember, Union, UnionVariant, Tuple } from "@typespec/compiler";
 
 export async function $onEmit(context: EmitContext) {
     const assetEmitter = context.getAssetEmitter(MyCodeEmitter);
@@ -62,12 +62,7 @@ class MyCodeEmitter extends CodeTypeEmitter {
             const ctx = this.emitter.getContext();
             const ttype = intrinsicNameToBSQType.get(scalarName) as string;
 
-            if (ttype === "String" && ctx.pattern) {
-                return this.emitter.result.rawCode(code`StringOf</${ctx.pattern}/>`);
-            }
-            else {
-                return this.emitter.result.rawCode(ttype);
-            }
+            return this.emitter.result.rawCode(ttype);
         }
     }
 
@@ -82,7 +77,15 @@ class MyCodeEmitter extends CodeTypeEmitter {
     }
 
     modelLiteral(model: Model) {
-        return this.emitter.result.rawCode(code`{ ${this.emitter.emitModelProperties(model)} }`);
+        const builder = new StringBuilder();
+        let first = true;
+        model.properties.forEach((pp) => {
+            const ee = code`${!first ? "," : ""} ${this.emitter.emitModelProperty(pp)}`;
+            first = false;
+            builder.push(ee);
+        });
+
+        return this.emitter.result.rawCode(code`{ ${builder.reduce()} }`);
     }
 
     modelDeclarationContext(model: Model) {
@@ -95,47 +98,138 @@ class MyCodeEmitter extends CodeTypeEmitter {
         const extendsClause = model.baseModel ? code`provides ${this.emitter.emitTypeReference(model.baseModel)}` : "";
         const dkind = (model.derivedModels.length !== 0) ? "concept" : "entity";
 
-        return this.emitter.result.declaration(name, code`${dkind} ${name} ${extendsClause} { ${this.emitter.emitModelProperties(model)} }`);
+        const builder = new StringBuilder();
+        model.properties.forEach((pp) => {
+            const ee = code`    ${this.emitter.emitModelProperty(pp)}\n`;
+            builder.push(ee);
+        });
+
+        return this.emitter.result.declaration(name, code`${dkind} ${name} ${extendsClause} {\n${builder.reduce()}}`);
     }
 
     modelInstantiation(model: Model, name: string) {
         return this.modelDeclaration(model, name);
     }
 
-    modelPropertyLiteralReferenceContext(property: ModelProperty) {
-        const pattern = getPattern(this.emitter.getProgram(), property);
-        if (pattern) {
-            console.log(pattern);
-            return {
-                pattern: pattern
-            };
-        }
-        else {
-            return {
-            };
-        }
-    }
-
     modelPropertyLiteral(property: ModelProperty) {
         const name = property.name;
+
+        const pattern = getPattern(this.emitter.getProgram(), property);
+        const pattern_inv = pattern ? `invariant /${pattern}/.accepts($${name});` : "";
+
+        const kvs = getKnownValues(this.emitter.getProgram(), property);
+        const kvs_inv = kvs ? `invariant [NOT IMPLEMENTED];` : "";
+
+        const minlen = getMinLength(this.emitter.getProgram(), property);
+        const maxlen = getMaxLength(this.emitter.getProgram(), property);
+        let len_inv = "";
+        if(minlen !== undefined || maxlen !== undefined) {
+            const ml = minlen === undefined ? "" : minlen;
+            const mx = maxlen === undefined ? "" : maxlen;
+            len_inv = `invariant /.{${ml}, ${mx}}/.accepts($${name});`;
+        }
+        
+        const minitems = getMinItems(this.emitter.getProgram(), property);
+        const maxitems = getMaxItems(this.emitter.getProgram(), property);
+        let items_inv = "";
+        if(minitems !== undefined || maxitems !== undefined) {
+            const mi = minitems === undefined ? undefined : `$${name}.size() >= ${minitems};`;
+            const mx = maxitems === undefined ? undefined : `$${name}.size() <= ${maxitems};`;
+            if(minitems !== undefined && maxitems !== undefined) {
+                items_inv = `invariant /\(${mi}, ${mx});`;
+            }
+            else if(minitems !== undefined) {
+                items_inv = `invariant ${mi};`;
+            }
+            else {
+                items_inv = `invariant ${mx};`;
+            }
+        }
+        
+        const minvalue = getMinValue(this.emitter.getProgram(), property);
+        const maxvalue = getMaxValue(this.emitter.getProgram(), property);
+        let value_inv = "";
+        if(minvalue !== undefined || maxvalue !== undefined) {
+            const mi = minvalue === undefined ? undefined : `$${name} >= ${minvalue};`;
+            const mx = maxvalue === undefined ? undefined : `$${name} <= ${maxvalue};`;
+            if(minvalue !== undefined && maxvalue !== undefined) {
+                value_inv = `invariant /\(${mi}, ${mx});`;
+            }
+            else if(minvalue !== undefined) {
+                value_inv = `invariant ${mi};`;
+            }
+            else {
+                value_inv = `invariant ${mx};`;
+            }
+        }
+
+        const invs = [pattern_inv, kvs_inv, len_inv, items_inv, value_inv].filter((x) => x !== "").join(" ");
 
         const ctx = this.emitter.getContext();
         if(ctx.inLiteralModel) {
             return this.emitter.result.rawCode(code`${name}: ${this.emitter.emitTypeReference(property.type)}`);
         }
         else {
-            return this.emitter.result.rawCode(code`field ${name}: ${this.emitter.emitTypeReference(property.type)}`);
+            return this.emitter.result.rawCode(code`field ${name}: ${this.emitter.emitTypeReference(property.type)}; ${invs}`);
         }
     }
 
     arrayDeclaration(array: Model, name: string, elementType: Type) {
         return this.emitter.result.declaration(
             name,
-            code`interface ${name} extends Array<${this.emitter.emitTypeReference(elementType)}> { };`
+            code`type ${name} = List<${this.emitter.emitTypeReference(elementType)}>;`
         );
     }
 
     arrayLiteral(array: Model, elementType: Type) {
         return this.emitter.result.rawCode(code`List<${this.emitter.emitTypeReference(elementType)}>`);
     }
+
+    enumDeclaration(en: Enum, name: string) {
+        return this.emitter.result.declaration(
+          name,
+          code`enum ${name} {
+            ${this.emitter.emitEnumMembers(en)}
+          }`
+        );
+      }
+    
+      enumMember(member: EnumMember) {
+        return `
+          ${member.name}
+        `;
+      }
+    
+      unionDeclaration(union: Union, name: string) {
+        return this.emitter.result.declaration(
+          name,
+          code`type ${name} = ${this.emitter.emitUnionVariants(union)};`
+        );
+      }
+    
+      unionInstantiation(union: Union, name: string) {
+        return this.unionDeclaration(union, name);
+      }
+    
+      unionLiteral(union: Union) {
+        return this.emitter.emitUnionVariants(union);
+      }
+    
+      unionVariants(union: Union) {
+        const builder = new StringBuilder();
+        let i = 0;
+        for (const variant of union.variants.values()) {
+          i++;
+          builder.push(code`${this.emitter.emitType(variant)}${i < union.variants.size ? " | " : ""}`);
+        }
+        return this.emitter.result.rawCode(builder.reduce());
+      }
+    
+      unionVariant(variant: UnionVariant) {
+        return this.emitter.emitTypeReference(variant.type);
+      }
+    
+      tupleLiteral(tuple: Tuple) {
+        return code`[${this.emitter.emitTupleLiteralValues(tuple)}]`;
+      }
 }
