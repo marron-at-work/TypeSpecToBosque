@@ -20,5 +20,9 @@
   },
   "type": "module",
   "main": "dist/index.js",
-  "tspMain": "lib/main.tsp"
+  "tspMain": "lib/main.tsp",
+  "engines": {
+    "node": ">=16.0.0",
+    "typescript": ">=5.0.0"
+  }
 }

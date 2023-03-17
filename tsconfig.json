@@ -9,7 +9,7 @@
     "alwaysStrict": true,                             /* Ensure 'use strict' is always emitted. */
     "skipLibCheck": true,                                 /* Skip type checking all .d.ts files. */
 
-    "moduleResolution": "node",
+    "moduleResolution": "node16",
     "module": "ESNext",
     "target": "es2019",
     "rootDir": "./src",
