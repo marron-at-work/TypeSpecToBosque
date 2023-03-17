@@ -1,5 +1,6 @@
 
-import { EmitContext, Model, CodeTypeEmitter, Program, ModelProperty, code, BooleanLiteral, NumericLiteral, StringLiteral, Scalar, IntrinsicType, Type, getPattern, StringBuilder, getKnownValues, getMinLength, getMaxLength, getMinItems, getMaxItems, getMinValue, getMaxValue, Enum, EnumMember, Union, UnionVariant, Tuple } from "@typespec/compiler";
+import { EmitContext, Model, Program, ModelProperty, BooleanLiteral, NumericLiteral, StringLiteral, Scalar, IntrinsicType, Type, getPattern, getKnownValues, getMinLength, getMaxLength, getMinItems, getMaxItems, getMinValue, getMaxValue, Enum, EnumMember, Union, UnionVariant, Tuple } from "@typespec/compiler";
+import { CodeTypeEmitter, code, StringBuilder } from "@typespec/compiler/emitter-framework";
 
 export async function $onEmit(context: EmitContext) {
     const assetEmitter = context.getAssetEmitter(MyCodeEmitter);
