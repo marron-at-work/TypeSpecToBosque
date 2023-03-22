@@ -1,15 +1,15 @@
 
-import { EmitContext, Model, Program, ModelProperty, BooleanLiteral, NumericLiteral, StringLiteral, Scalar, IntrinsicType, Type, getPattern, getKnownValues, getMinLength, getMaxLength, getMinItems, getMaxItems, getMinValue, getMaxValue, Enum, EnumMember, Union, UnionVariant, Tuple } from "@typespec/compiler";
-import { CodeTypeEmitter, code, StringBuilder } from "@typespec/compiler/emitter-framework";
+import { EmitContext, Model, Program, ModelProperty, Scalar, IntrinsicType, Type, getPattern, getKnownValues, getMinLength, getMaxLength, getMinItems, getMaxItems, getMinValue, getMaxValue, Enum, EnumMember, Union, UnionVariant, Tuple, Namespace, isTemplateDeclaration, ModelIndexer, DecoratedType } from "@typespec/compiler";
 
 export async function $onEmit(context: EmitContext) {
-    const assetEmitter = context.getAssetEmitter(MyCodeEmitter);
+    context.program.checker.getGlobalNamespaceType().namespaces.forEach((nn) => {
+        if (nn.name !== "TypeSpec") {
+            const ce = new MyCodeEmitter(context.program, nn);
+            const nsv = ce.process();
 
-    // emit my entire typespec program
-    assetEmitter.emitProgram();
-
-    // lastly, write your emit output into the output directory
-    await assetEmitter.writeOutput();
+            console.log(nsv);
+        }
+    });
 }
 
 const intrinsicNameToBSQType = new Map<string, string>([
@@ -35,202 +35,304 @@ const intrinsicNameToBSQType = new Map<string, string>([
     ["null", "None"],
 ]);
 
-class MyCodeEmitter extends CodeTypeEmitter {
-    programContext(program: Program) {
-        const sourceFile = this.emitter.createSourceFile("testout.bsq");
-        return {
-            scope: sourceFile.globalScope,
-        };
+const s_elemNonce = "@@exp@@";
+const s_namespaceSep = "::";
+
+class ProcessResult {
+    readonly decl: string;
+    readonly checks: string[];
+
+    constructor(decl: string, checks: string[]) {
+        this.decl = decl;
+        this.checks = checks;
+    }
+}
+
+class MyCodeEmitter {
+    readonly m_program: Program;
+    readonly m_namespace: Namespace;
+
+    constructor(program: Program, namespace: Namespace) {
+        this.m_program = program;
+        this.m_namespace = namespace;
     }
 
-    booleanLiteral(boolean: BooleanLiteral) {
-        return JSON.stringify(boolean.value);
-    }
-
-    numericLiteral(number: NumericLiteral) {
-        return JSON.stringify(number.value);
-    }
-
-    stringLiteral(string: StringLiteral) {
-        return JSON.stringify(string.value);
-    }
-
-    scalarDeclaration(scalar: Scalar, scalarName: string) {
-        if (!intrinsicNameToBSQType.has(scalarName)) {
-            return this.emitter.emitTypeReference(scalar.baseScalar as Scalar);
+    private getNamespacePrefix(ns: Namespace | undefined): string {
+        if(ns === undefined) {
+            return "";
         }
         else {
-            const ctx = this.emitter.getContext();
-            const ttype = intrinsicNameToBSQType.get(scalarName) as string;
-
-            return this.emitter.result.rawCode(ttype);
+            if(this.m_namespace.name === ns.name) {
+                return "";
+            }
+            else {
+                return ns.name + s_namespaceSep;
+            }
         }
     }
 
-    intrinsic(intrinsic: IntrinsicType, name: string) {
-        return this.emitter.result.rawCode(intrinsicNameToBSQType.get(name) as string);
+    private scopeResolveName(ns: Namespace | undefined, name: string): string {
+        return this.getNamespacePrefix(ns) + name;
     }
 
-    modelLiteralContext(model: Model) {
-        return {
-            inLiteralModel: true
-        };
+    private spathResolveNameAccess(spath: string, name: string): string {
+        return spath + "." + name;
     }
 
-    modelLiteral(model: Model) {
-        const builder = new StringBuilder();
-        let first = true;
-        model.properties.forEach((pp) => {
-            const ee = code`${!first ? "," : ""} ${this.emitter.emitModelProperty(pp)}`;
-            first = false;
-            builder.push(ee);
-        });
-
-        return this.emitter.result.rawCode(code`{ ${builder.reduce()} }`);
+    private spathResolveTupleAccess(spath: string, idx: number): string {
+        return spath + "." + idx.toString();
     }
 
-    modelDeclarationContext(model: Model) {
-        return {
-            inLiteralModel: false
-        };
+    private spathResolveEveryAccess(spath: string, exp: string): string {
+        return spath + ".allOf((ee) => " + exp + ")";
     }
 
-    modelDeclaration(model: Model, name: string) {
-        const extendsClause = model.baseModel ? code`provides ${this.emitter.emitTypeReference(model.baseModel)}` : "";
-        const dkind = (model.derivedModels.length !== 0) ? "concept" : "entity";
-
-        const builder = new StringBuilder();
-        model.properties.forEach((pp) => {
-            const ee = code`    ${this.emitter.emitModelProperty(pp)}\n`;
-            builder.push(ee);
-        });
-
-        return this.emitter.result.declaration(name, code`${dkind} ${name} ${extendsClause} {\n${builder.reduce()}}`);
+    private resolveListOfT(type: Type, spath: string): ProcessResult {
+        const tres = this.processTypeReference(type, "ee");
+        const checks = tres.checks.length !== 0 ? [this.spathResolveEveryAccess(spath, tres.checks.join(" && "))] : [];
+        return new ProcessResult("List<" + tres.decl + ">", checks);
     }
 
-    modelInstantiation(model: Model, name: string) {
-        return this.modelDeclaration(model, name);
-    }
+    private processDecorators(tt: Type, npath: string): string[] {
+        let pchecks: string[] = [];
 
-    modelPropertyLiteral(property: ModelProperty) {
-        const name = property.name;
+        const pattern = getPattern(this.m_program, tt);
+        if(pattern) {
+            pchecks.push(`/${pattern}/.accepts(${npath})`);
+        }
 
-        const pattern = getPattern(this.emitter.getProgram(), property);
-        const pattern_inv = pattern ? `invariant /${pattern}/.accepts($${name});` : "";
+        const kvs = tt.kind === "ModelProperty" ? getKnownValues(this.m_program, tt) : undefined;
+        if(kvs) {
+            pchecks.push(`[NOT IMPLEMENTED -- KNOWN VALUES]`);
+        }
 
-        const kvs = getKnownValues(this.emitter.getProgram(), property);
-        const kvs_inv = kvs ? `invariant [NOT IMPLEMENTED];` : "";
-
-        const minlen = getMinLength(this.emitter.getProgram(), property);
-        const maxlen = getMaxLength(this.emitter.getProgram(), property);
-        let len_inv = "";
+        const minlen = getMinLength(this.m_program, tt);
+        const maxlen = getMaxLength(this.m_program, tt);
         if(minlen !== undefined || maxlen !== undefined) {
             const ml = minlen === undefined ? "" : minlen;
             const mx = maxlen === undefined ? "" : maxlen;
-            len_inv = `invariant /.{${ml}, ${mx}}/.accepts($${name});`;
+            pchecks.push(`/.{${ml}, ${mx}}/.accepts(${npath})`);
         }
         
-        const minitems = getMinItems(this.emitter.getProgram(), property);
-        const maxitems = getMaxItems(this.emitter.getProgram(), property);
-        let items_inv = "";
+        const minitems = getMinItems(this.m_program, tt);
+        const maxitems = getMaxItems(this.m_program, tt);
         if(minitems !== undefined || maxitems !== undefined) {
-            const mi = minitems === undefined ? undefined : `$${name}.size() >= ${minitems};`;
-            const mx = maxitems === undefined ? undefined : `$${name}.size() <= ${maxitems};`;
+            const mi = minitems === undefined ? undefined : `${npath}.size() >= ${minitems}`;
+            const mx = maxitems === undefined ? undefined : `${npath}.size() <= ${maxitems}`;
             if(minitems !== undefined && maxitems !== undefined) {
-                items_inv = `invariant /\(${mi}, ${mx});`;
+                pchecks.push(`/\(${mi}, ${mx})`);
             }
             else if(minitems !== undefined) {
-                items_inv = `invariant ${mi};`;
+                pchecks.push(`${mi}`);
             }
             else {
-                items_inv = `invariant ${mx};`;
+                pchecks.push(`${mx}`);
             }
         }
         
-        const minvalue = getMinValue(this.emitter.getProgram(), property);
-        const maxvalue = getMaxValue(this.emitter.getProgram(), property);
-        let value_inv = "";
+        const minvalue = getMinValue(this.m_program, tt);
+        const maxvalue = getMaxValue(this.m_program, tt);
         if(minvalue !== undefined || maxvalue !== undefined) {
-            const mi = minvalue === undefined ? undefined : `$${name} >= ${minvalue};`;
-            const mx = maxvalue === undefined ? undefined : `$${name} <= ${maxvalue};`;
+            const mi = minvalue === undefined ? undefined : `${npath} >= ${minvalue}`;
+            const mx = maxvalue === undefined ? undefined : `${npath} <= ${maxvalue}`;
             if(minvalue !== undefined && maxvalue !== undefined) {
-                value_inv = `invariant /\(${mi}, ${mx});`;
+               pchecks.push(`/\(${mi}, ${mx})`);
             }
             else if(minvalue !== undefined) {
-                value_inv = `invariant ${mi};`;
+                pchecks.push(`${mi}`);
             }
             else {
-                value_inv = `invariant ${mx};`;
+                pchecks.push(`${mx}`);
             }
         }
 
-        const invs = [pattern_inv, kvs_inv, len_inv, items_inv, value_inv].filter((x) => x !== "").join(" ");
+        return pchecks
+    }
 
-        const ctx = this.emitter.getContext();
-        if(ctx.inLiteralModel) {
-            return this.emitter.result.rawCode(code`${name}: ${this.emitter.emitTypeReference(property.type)}`);
+    private processPropertyLiteral(property: ModelProperty, spath: string, noextend: boolean): {pname: string, ptype: string, pchecks: string[]} {
+        const name = property.name;
+        const npath = noextend ? spath : this.spathResolveNameAccess(spath, property.name);
+        const ptypeinfo = this.processTypeReference(property.type, npath);
+
+        const pchecks = this.processDecorators(property, npath);
+
+        return {pname: name, ptype: ptypeinfo.decl, pchecks: [...pchecks, ...ptypeinfo.checks]};
+    }
+
+    private resolveObjectLiteral(model: Model, spath: string): ProcessResult {
+        const ffs: {pname: string, ptype: string, pchecks: string[]}[] = [];
+        model.properties.forEach((ff) => {
+            const nc = this.processPropertyLiteral(ff, spath, false);
+            ffs.push(nc);
+        });
+
+        const decl = `{ ${ffs.map((ff) => `${ff.pname}: ${ff.ptype}`).join(", ")} }`;
+        const checks = ffs.map((ff) => ff.pchecks).reduce((a, b) => a.concat(b), []);
+
+        return new ProcessResult(decl, checks);
+    }
+
+    private resolveTupleLiteral(tuple: Tuple, spath: string): ProcessResult {
+        const ffs: ProcessResult[] = [];
+        tuple.values.forEach((ff, ii) => {
+            const nc = this.processTypeReference(ff, this.spathResolveTupleAccess(spath, ii));
+            ffs.push(nc);
+        });
+
+        const decl = `[${ffs.map((ff) => `${ff.decl}`).join(", ")}]`;
+        const checks = ffs.map((ff) => ff.checks).reduce((a, b) => a.concat(b), []);
+
+        return new ProcessResult(decl, checks);
+    }
+
+    private resolveUnionLiteral(union: Union, spath: string): ProcessResult {
+        const ffs: ProcessResult[] = [];
+        union.variants.forEach((vv) => {
+            const nc = this.processTypeReference(vv.type, "[Constraints on Union Variants Not Supported]");
+            ffs.push(nc);
+        });
+
+        const decl = `${ffs.map((ff) => `${ff.decl}`).join(" | ")}`;
+        return new ProcessResult(decl, []);
+    }
+
+    private processTypeReference(type: Type, spath: string): ProcessResult {
+        if(type.kind === "Model") {
+            if(type.name === "Array") {
+                return this.resolveListOfT((type.indexer as ModelIndexer).value, spath);
+            }
+            else if (type.name === "") {
+                return this.resolveObjectLiteral(type, spath);
+            }
+            else {
+                return new ProcessResult(this.scopeResolveName(type.namespace, type.name), []);
+            }
+        }
+        else if(type.kind === "Scalar") {
+            if(!intrinsicNameToBSQType.has(type.name)) {
+                return new ProcessResult(this.scopeResolveName(type.namespace, type.name), []);
+            }
+            else {
+                const ttype = intrinsicNameToBSQType.get(type.name) as string;
+                return new ProcessResult(ttype, []);
+            }
+        }
+        else if(type.kind === "Enum") {
+            return new ProcessResult(this.scopeResolveName(type.namespace, type.name), []);
+        }
+        else if(type.kind === "Tuple") {
+            return this.resolveTupleLiteral(type, spath);
+        }
+        else if(type.kind === "Union") {
+            if(type.name !== undefined) {
+                return new ProcessResult(this.scopeResolveName(type.namespace, type.name), []);
+            }
+            else {
+                return this.resolveUnionLiteral(type, spath);
+            }
+        }
+        else if(type.kind === "Intrinsic") {
+            if(type.name === "null") {
+                return new ProcessResult("None", []);
+            }
+            else {
+                console.log("Unexpected Intrinsic type: " + type.kind);
+                return new ProcessResult("[|Unexpected Intrinsic type: " + type.kind + "|]", []);    
+            }
         }
         else {
-            return this.emitter.result.rawCode(code`field ${name}: ${this.emitter.emitTypeReference(property.type)}; ${invs}`);
+            console.log("Unexpected type: " + type.kind);
+            return new ProcessResult("[|Unexpected type: " + type.kind + "|]", []);
         }
     }
 
-    arrayDeclaration(array: Model, name: string, elementType: Type) {
-        return this.emitter.result.declaration(
-            name,
-            code`type ${name} = List<${this.emitter.emitTypeReference(elementType)}>;`
-        );
+    process() {
+        let decls: string[] = []; 
+
+        this.m_namespace.models.forEach((mm) => {
+            if(!isTemplateDeclaration(mm)) {
+                const pr = this.processTopLevelModel(mm);
+                decls.push(pr.decl);
+
+                if(pr.checks.length !== 0) {
+                    if(pr.checks.length === 1) {
+                        decls.push(`invariant ${pr.checks[0]};\n`);
+                    }
+                    else {
+                        decls.push(...pr.checks.map((cc) => `invariant ${cc};`), "\n");
+                    }
+                }
+            }
+        });
+        
+        this.m_namespace.enums.forEach((ee) => {
+            decls.push(ee.name);
+        });
+
+        this.m_namespace.scalars.forEach((ss) => {
+            const ssdecl = intrinsicNameToBSQType.has(ss.name) ? intrinsicNameToBSQType.get(ss.name) as string : this.processTypeReference(ss.baseScalar as Scalar, "$value").decl;
+            const sschecks = this.processDecorators(ss, "$value");
+
+            let decl = `typedecl ${ss.name} = ${ssdecl}`;
+            if(sschecks.length === 0) {
+                decl += ";";
+            }
+            else {
+                decl += " & {\n    invariant " + sschecks.join(" && ") + ";\n}";
+            }
+
+            decls.push(decl);
+        });
+
+        this.m_namespace.unions.forEach((uu) => {
+            if (!isTemplateDeclaration(uu)) {
+                if (uu.name === undefined) {
+                    console.log("[Union Declaration]");
+                }
+                else {
+                    const mentities: ProcessResult[] = [];
+                    uu.variants.forEach((vv) => {
+                        const mentity = this.processTopLevelVariantMember(vv);
+                        mentities.push(mentity);                
+                    });
+
+                    const ebody = mentities.map((mm) => mm.decl).join("\n| ");
+                    decls.push(`datatype ${uu.name} provides APIType \nof\n${ebody}\n;`);
+                }
+            }
+        });
+
+        return `namespace ${this.m_namespace.name};\n\n${decls.join("\n")}\n`;
     }
 
-    arrayLiteral(array: Model, elementType: Type) {
-        return this.emitter.result.rawCode(code`List<${this.emitter.emitTypeReference(elementType)}>`);
+    private processTopLevelModel(model: Model): ProcessResult {
+        const ffs: {pname: string, ptype: string, pchecks: string[]}[] = [];
+        model.properties.forEach((ff) => {
+            const nc = this.processPropertyLiteral(ff, "$" + ff.name, true);
+            ffs.push(nc);
+        });
+
+        const checks = ffs.map((ff) => ff.pchecks).reduce((a, b) => a.concat(b), []).map((cc) => "    invariant " + cc + ";\n").join("");
+        const decl = `entity ${model.name} provides APIType {\n${ffs.map((ff) => `    field ${ff.pname}: ${ff.ptype};`).join("\n")}\n${checks}}`;
+
+        return new ProcessResult(decl, []);
     }
 
-    enumDeclaration(en: Enum, name: string) {
-        return this.emitter.result.declaration(
-          name,
-          code`enum ${name} {
-            ${this.emitter.emitEnumMembers(en)}
-          }`
-        );
-      }
-    
-      enumMember(member: EnumMember) {
-        return `
-          ${member.name}
-        `;
-      }
-    
-      unionDeclaration(union: Union, name: string) {
-        return this.emitter.result.declaration(
-          name,
-          code`type ${name} = ${this.emitter.emitUnionVariants(union)};`
-        );
-      }
-    
-      unionInstantiation(union: Union, name: string) {
-        return this.unionDeclaration(union, name);
-      }
-    
-      unionLiteral(union: Union) {
-        return this.emitter.emitUnionVariants(union);
-      }
-    
-      unionVariants(union: Union) {
-        const builder = new StringBuilder();
-        let i = 0;
-        for (const variant of union.variants.values()) {
-          i++;
-          builder.push(code`${this.emitter.emitType(variant)}${i < union.variants.size ? " | " : ""}`);
+    private processTopLevelVariantMember(uv: UnionVariant): ProcessResult {
+        if(uv.type.kind !== "Model" || uv.type.name !== "") {
+            return new ProcessResult("[|Named Union Variants must be Literal Objects: " + uv.name.toString() + "|]", []);
         }
-        return this.emitter.result.rawCode(builder.reduce());
-      }
-    
-      unionVariant(variant: UnionVariant) {
-        return this.emitter.emitTypeReference(variant.type);
-      }
-    
-      tupleLiteral(tuple: Tuple) {
-        return code`[${this.emitter.emitTupleLiteralValues(tuple)}]`;
-      }
+
+        const mm = uv.type as Model;
+        const ffs: {pname: string, ptype: string, pchecks: string[]}[] = [];
+        mm.properties.forEach((ff) => {
+            const nc = this.processPropertyLiteral(ff, "$" + ff.name, true);
+            ffs.push(nc);
+        });
+
+        const checks = ffs.map((ff) => ff.pchecks).reduce((a, b) => a.concat(b), []).map((cc) => "    invariant " + cc + ";\n").join("");
+        const decl = `${uv.name as string} {\n${ffs.map((ff) => `    field ${ff.pname}: ${ff.ptype};`).join("\n")}\n${checks}}`;
+
+        return new ProcessResult(decl, []);
+    }
 }
