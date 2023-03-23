@@ -253,15 +253,6 @@ class MyCodeEmitter {
             if(!isTemplateDeclaration(mm)) {
                 const pr = this.processTopLevelModel(mm);
                 decls.push(pr.decl);
-
-                if(pr.checks.length !== 0) {
-                    if(pr.checks.length === 1) {
-                        decls.push(`invariant ${pr.checks[0]};\n`);
-                    }
-                    else {
-                        decls.push(...pr.checks.map((cc) => `invariant ${cc};`), "\n");
-                    }
-                }
             }
         });
         
