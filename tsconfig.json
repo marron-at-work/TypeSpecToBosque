@@ -10,9 +10,9 @@
     "skipLibCheck": true,                                 /* Skip type checking all .d.ts files. */
 
     "moduleResolution": "node16",
-    "module": "ESNext",
+    "module": "node16",
     "target": "es2019",
     "rootDir": "./src",
-    "outDir": "./dist"
+    "outDir": "./dist",
   }
 }

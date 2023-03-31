@@ -257,7 +257,7 @@ class MyCodeEmitter {
         });
         
         this.m_namespace.enums.forEach((ee) => {
-            decls.push(ee.name);
+            decls.push(`enum ${ee.name} = {\n    ${[...ee.members].map((vv) => vv[1].name).join(",\n    ")}\n}`);
         });
 
         this.m_namespace.scalars.forEach((ss) => {

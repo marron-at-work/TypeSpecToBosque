@@ -4,7 +4,7 @@
   "description": "Compiler from TypeSpec into Bosque",
   "scripts": {
     "build": "tsc -p .",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "mocha ./dist/test/*.js --timeout 10000"
   },
   "repository": {
     "type": "git",
@@ -17,6 +17,10 @@
     "@types/node": "18.15.2"
   },
   "devDependencies": {
+    "mocha": "10.2.0",
+    "@types/mocha": "10.0.1",
+    "chai": "4.3.7",
+    "@types/chai": "4.3.0"
   },
   "type": "module",
   "main": "dist/index.js",
