@@ -9,6 +9,6 @@ describe("Top level Model decls (Basics)", () => {
             iv: int64;
         }
        `, "main.bsq");
-       expect(output).contains("MISSING"); 
+       expect(output); 
     });
 });

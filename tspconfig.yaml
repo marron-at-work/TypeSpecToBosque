@@ -1,0 +1,2 @@
+emit:
+  - "@bosque/typespec-to-bosque"

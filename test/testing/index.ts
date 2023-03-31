@@ -4,5 +4,5 @@ import { fileURLToPath } from "url";
 
 export const BosqueLibrary = createTestLibrary({
     name: "@bosque/typespec-to-bosque",
-    packageRoot: resolvePath(fileURLToPath(import.meta.url), "../../../../")
+    packageRoot: resolvePath(fileURLToPath(import.meta.url), "../../../")
 });

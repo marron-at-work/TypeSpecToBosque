@@ -10,12 +10,11 @@ export async function createBosqueTestHost(): Promise<TestHost> {
 export async function bosqueEmitterOutputFor(code: string, fileName: string) {
     const host = await createBosqueTestHost();
     const outfile = resolveVirtualPath("typespec-output/");
-    host.addTypeSpecFile("main.tsp", code);
+    host.addTypeSpecFile("testfile.tsp", code);
 
-    const diagnostics = await host.diagnose("main.tsp", {
+    const diagnostics = await host.diagnose("testfile.tsp", {
         noEmit: false,
-        emit: ["@bosque/typespec-to-bosque"],
-        options: {"@bosque/typespec-to-bosque": { outfile: outfile }}
+        emit: ["@bosque/typespec-to-bosque"]
     });
     expectDiagnosticEmpty(diagnostics);
     const npath = outfile + fileName;
